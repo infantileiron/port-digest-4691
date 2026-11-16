@@ -1,1 +1,1 @@
-export const state={user:null,arrivals:[],subscriptions:[],receipts:[],context:null,preview:null,selected:null};
+export const state={user:null,arrivals:[],subscriptions:[],receipts:[],ledger:[],ledgerSummary:[],context:null,preview:null,selected:null};

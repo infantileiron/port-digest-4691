@@ -2,8 +2,9 @@ import random
 from datetime import datetime,timedelta
 from src.config.database import Base,engine,Session
 from src.models.entities import User,Arrival,Subscription,Receipt
+from src.services.ledger import open_snapshot,materialize
 from src.utils.security import hash_password
-from src.utils.time import now_utc,SH,next_due
+from src.utils.time import now_utc,SH,next_due,utc_iso
 
 def seed():
  Base.metadata.create_all(engine);rng=random.Random(3113);now=now_utc();day=now.astimezone(SH).date()-timedelta(days=1)
@@ -17,6 +18,10 @@ def seed():
    if not s.query(Arrival).filter_by(code=code).first():s.add(Arrival(code=code,station=('北站','南站','东港')[i%3],planned_at=planned.astimezone(now.tzinfo).isoformat(),actual_at=None if i%29==0 else actual.astimezone(now.tzinfo).isoformat(),note='临港联运昨日交接班导出'))
   for station in ('北站','南站','东港'):
    name=station+'值班晨报'
-   if not s.query(Subscription).filter_by(name=name).first():s.add(Subscription(name=name,station=station,daily_at='08:30',recipient=station+'值班室',enabled=False,next_run_at=next_due('08:30',now).isoformat()))
+   if not s.query(Subscription).filter_by(name=name).first():
+    sub=Subscription(name=name,station=station,daily_at='08:30',recipient=station+'值班室',enabled=False,next_run_at=utc_iso(next_due('08:30',now)))
+    s.add(sub);s.flush()
+    open_snapshot(s,sub,now,'种子初始化：暂停订阅，计划自此时点生效')
+    materialize(s,sub,now)
   s.commit();print({'users':s.query(User).count(),'arrivals':s.query(Arrival).count(),'subscriptions':s.query(Subscription).count(),'receipts':s.query(Receipt).count()})
 if __name__=='__main__':seed()

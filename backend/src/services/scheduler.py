@@ -1,26 +1,34 @@
-import json,logging
-from pathlib import Path
-from sqlalchemy import select
-from src.models.entities import Subscription,Receipt,Audit
-from src.services.repository import arrival_rows
-from src.services.digest import calculate
-from src.utils.time import aware,next_due,yesterday
+"""到点调度：每秒扫描，先按上海日历补齐账本，再逐个追补欠报。
 
-def run_due(s,now):
- sent=[]
- subscriptions=s.scalars(select(Subscription).where(Subscription.enabled.is_(True),Subscription.next_run_at<=now.isoformat()).with_for_update(skip_locked=True)).all()
- for sub in subscriptions:
-  if aware(sub.next_run_at)>now:continue
-  day=yesterday(now);existing=s.query(Receipt).filter_by(subscription_id=sub.id,report_day=day).first()
-  if not existing:
-   payload=calculate(arrival_rows(s),day,sub.station)
-   receipt=Receipt(subscription_id=sub.id,report_day=day,recipient=sub.recipient,created_at=now.isoformat(),state='delivered',payload=payload)
-   s.add(receipt);s.flush();sent.append(receipt.id)
-   s.add(Audit(actor='scheduler',action='到点分发订阅 '+str(sub.id)+' / '+day,created=now.isoformat()))
-  sub.last_run_at=now.isoformat();sub.next_run_at=next_due(sub.daily_at,now).isoformat()
+首次到点沿用原规则（save_subscription 写入的 next_run_at 不变）；之后由账本接管，
+服务中断恢复时把停机期间所有欠报按当时计划逐时点补入收件箱，空日也留回执。
+"""
+import os
+from sqlalchemy import select
+from src.models.entities import Subscription
+from src.services.repository import arrival_rows
+from src.services.ledger import lock_subscription,materialize,process_pending
+from src.utils.time import aware,utc_iso
+
+def artifact_dir():
+ return os.environ.get('ARTIFACT_DIR','/artifacts')
+
+def run_due(s,now,crash_hook=None):
+ result=dict(scanned=0,delivered=[],empty=[],reconciled=[],pending=0,skipped=0)
+ now_iso=utc_iso(now)
+ due_subs=s.scalars(select(Subscription).where(
+  Subscription.next_run_at<=now_iso).order_by(Subscription.id.asc())).all()
+ for sub0 in due_subs:
+  sub=lock_subscription(s,sub0.id)
+  if not sub or aware(sub.next_run_at)>now:continue
+  result['scanned']+=1
+  # 无论启用/暂停都要先补账本：暂停区间标 skipped_pause，启用区间欠报为 pending。
+  materialize(s,sub,now)
+  if not sub.enabled:
+   # 暂停：不追补、不推进游标；恢复时由修订接口重排下一个到点。
+   s.commit();continue
+  summary=process_pending(s,sub,now,arrival_rows,artifact_dir=artifact_dir(),crash_hook=crash_hook)
+  result['delivered']+=summary['delivered'];result['empty']+=summary['empty']
+  result['reconciled']+=summary['reconciled'];result['skipped']+=summary['skipped']
  s.commit()
- for i in sent:
-  try:
-   receipt=s.get(Receipt,i);Path('/artifacts/'+str(i)+'.json').write_text(json.dumps(receipt.payload,ensure_ascii=False,indent=2))
-  except Exception:logging.exception('DB inbox delivered; optional artifact write failed')
- return sent
+ return result

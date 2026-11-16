@@ -1,0 +1,7 @@
+import {state} from '../stores/session.js';import {table} from '../components/common/table.js';import {badge} from '../components/common/status.js';import {LEDGER_STATE_TEXT} from '../constants/enums.js';import {esc} from '../utils/html.js';import {local} from '../utils/dates.js';
+const subName=id=>(state.subscriptions.find(s=>s.id===id)||{name:'#'+id}).name;
+export function render(){
+ let summary=state.ledgerSummary;
+ let cards=summary.length?summary.map(x=>`<div class="metric-card"><strong>${esc(x.name)}</strong><span>${x.enabled?'启用':'暂停'} · 应发 ${x.total}</span><span>已入箱 ${x.delivered} · 空日 ${x.empty} · 欠报 ${x.pending} · 暂停不补 ${x.skipped_pause}</span></div>`).join(''):'<p class="notice">尚无订阅计划。</p>';
+ let rows=state.ledger.map(r=>[subName(r.subscription_id),r.report_day,local(r.due_at),esc(r.station),esc(r.recipient),badge(r.state),r.receipt_id?('#'+r.receipt_id):'—',String(r.attempts),esc(r.basis)]);
+ return `<div class="split"><section class="panel"><h2>上海日历追补计划账本</h2><p class="notice">每个应发时点一行，唯一归属当时生效的计划快照。停机恢复后从最早欠报逐日追补到全部入箱；暂停期间标“暂停不补”，恢复也不补；空日也留回执。</p><div class="metric-grid">${cards}</div>${table(['订阅','报告日','应发时点 / 上海','当时港站','当时收件箱','状态','回执','尝试','欠报/归属依据'],rows)}</section><aside class="side"><h2>逐日追补口径</h2><p>应发：按上海日历每日 HH:MM 展开，改时刻后从生效时点重新划界。</p><p>已发：回执入箱即冻结来源 checksum，原始记录之后修订不改写。</p><p>欠报：状态为“${esc(LEDGER_STATE_TEXT.pending)}”的账本行，worker 每秒扫描时按应发时点从早到晚补，不跳过、不重复。</p><p class="eyebrow">状态枚举：${Object.values(LEDGER_STATE_TEXT).map(esc).join(' / ')}</p></aside></div>`}

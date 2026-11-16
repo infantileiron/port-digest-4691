@@ -8,6 +8,7 @@ from src.utils.time import now_utc,yesterday,SH
 from src.services.business import audit,dump
 from src.services.repository import arrival_rows,save_arrival,save_subscription,get_receipt
 from src.services.digest import calculate
+from src.services.ledger import ledger_rows,ledger_summary
 from src.controllers.business import export_receipt
 router=APIRouter()
 @router.post('/auth/login')
@@ -39,6 +40,14 @@ def create_subscription(data:SubscriptionInput,u=Depends(admin),s=Depends(db)):
 @router.put('/subscriptions/{i}')
 def edit_subscription(i:int,data:SubscriptionInput,u=Depends(admin),s=Depends(db)):
  r=save_subscription(s,data,i);audit(s,u,'修订订阅 '+r.name);return dump(r)
+@router.get('/subscriptions/{i}/ledger')
+def subscription_ledger(i:int,u=Depends(current),s=Depends(db)):
+ if not s.get(Subscription,i):raise HTTPException(404,'订阅不存在')
+ return [dump(r) for r in ledger_rows(s,i)]
+@router.get('/ledger')
+def all_ledger(u=Depends(current),s=Depends(db)):return [dump(r) for r in ledger_rows(s)]
+@router.get('/ledger/summary')
+def ledger_overview(u=Depends(current),s=Depends(db)):return ledger_summary(s)
 @router.get('/receipts')
 def receipts(u=Depends(current),s=Depends(db)):return [dump(r) for r in s.query(Receipt).order_by(Receipt.id.desc()).all()]
 @router.get('/receipts/{i}/export')
@@ -47,6 +56,7 @@ def export(i:int,u=Depends(current),s=Depends(db)):return export_receipt(s,i)
 def review(i:int,data:ReviewInput,u=Depends(admin),s=Depends(db)):
  r=get_receipt(s,i)
  if r.state=='reviewed':raise HTTPException(409,'回执已复核，不覆盖原复核意见')
+ if r.state=='empty':raise HTTPException(409,'空日回执无晨报内容，不支持值班复核')
  r.state='reviewed';r.review_note=data.note;s.commit();audit(s,u,'复核晨报回执 '+str(i));return dump(r)
 @router.get('/audits')
 def audits(u=Depends(admin),s=Depends(db)):return [dump(r) for r in s.query(Audit).order_by(Audit.id.desc()).limit(100)]
